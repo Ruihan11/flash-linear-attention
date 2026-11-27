@@ -48,6 +48,7 @@ def chunk_gated_delta_rule_fwd(
     dt_bias: torch.Tensor | None = None,
     chunk_size: int = 64,
     return_intermediate_states: bool = False,
+    disable_recompute: bool = False,
 ):
     g_input = g if use_gate_in_kernel else None
     if use_gate_in_kernel:
@@ -121,7 +122,9 @@ def chunk_gated_delta_rule_fwd(
         state_v_first=state_v_first,
         chunk_size=chunk_size,
     )
-    return g, o, A, final_state, initial_state, g_input, h if return_intermediate_states else None
+    if disable_recompute:
+        return g, o, A, final_state, initial_state, g_input, h, w, v_new
+    return g, o, A, final_state, initial_state, g_input, h if return_intermediate_states else None, None, None
 
 
 def chunk_gated_delta_rule_bwd(
@@ -144,32 +147,38 @@ def chunk_gated_delta_rule_bwd(
     A_log: torch.Tensor | None = None,
     dt_bias: torch.Tensor | None = None,
     chunk_size: int = 64,
+    w: torch.Tensor | None = None,
+    v_new: torch.Tensor | None = None,
+    h: torch.Tensor | None = None,
 ):
-    w, u = recompute_w_u_fwd(
-        k=k,
-        v=v,
-        beta=beta,
-        A=A,
-        g=g,
-        cu_seqlens=cu_seqlens,
-        chunk_indices=chunk_indices,
-    )
+    # w, v_new and h are the forward intermediates saved by `disable_recompute=True`
+    if h is None:
+        w, u = recompute_w_u_fwd(
+            k=k,
+            v=v,
+            beta=beta,
+            A=A,
+            g=g,
+            cu_seqlens=cu_seqlens,
+            chunk_indices=chunk_indices,
+        )
 
     if cp_context is not None:
         initial_state = expand_h0(initial_state, context=cp_context)
 
-    h, v_new, _ = chunk_gated_delta_rule_fwd_h(
-        k=k,
-        w=w,
-        u=u,
-        g=g,
-        initial_state=initial_state,
-        output_final_state=False,
-        cu_seqlens=cu_seqlens,
-        chunk_indices=chunk_indices,
-        state_v_first=state_v_first,
-        chunk_size=chunk_size,
-    )
+    if h is None:
+        h, v_new, _ = chunk_gated_delta_rule_fwd_h(
+            k=k,
+            w=w,
+            u=u,
+            g=g,
+            initial_state=initial_state,
+            output_final_state=False,
+            cu_seqlens=cu_seqlens,
+            chunk_indices=chunk_indices,
+            state_v_first=state_v_first,
+            chunk_size=chunk_size,
+        )
     dv = chunk_bwd_dv_local(
         q=q,
         k=k,
@@ -279,6 +288,7 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
         cp_context: FLACPContext | None = None,
         chunk_size: int = 64,
         return_intermediate_states: bool = False,
+        disable_recompute: bool = False,
     ):
         q_rstd, k_rstd = None, None
         if use_qk_l2norm_in_kernel:
@@ -291,7 +301,7 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
 
         if chunk_indices is None and cu_seqlens is not None:
             chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size, cu_seqlens_cpu=cu_seqlens_cpu)
-        g, o, A, final_state, initial_state, g_input, h = chunk_gated_delta_rule_fwd(
+        g, o, A, final_state, initial_state, g_input, h, w, v_new = chunk_gated_delta_rule_fwd(
             q=q,
             k=k,
             v=v,
@@ -309,9 +319,12 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
             dt_bias=dt_bias,
             chunk_size=chunk_size,
             return_intermediate_states=return_intermediate_states,
+            disable_recompute=disable_recompute,
         )
         if return_intermediate_states:
             return o.to(q.dtype), final_state, h
+        if not disable_recompute:
+            h = None
         ctx.save_for_backward(
             q,
             q_rstd,
@@ -328,6 +341,9 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
             g_input,
             A_log,
             dt_bias,
+            w,
+            v_new,
+            h,
         )
         ctx.scale = scale
         ctx.chunk_size = chunk_size
@@ -363,6 +379,9 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
             g_input,
             A_log,
             dt_bias,
+            w,
+            v_new,
+            h,
         ) = ctx.saved_tensors
         dq, dk, dv, db, dg, dh0, dA_log, ddt_bias = chunk_gated_delta_rule_bwd(
             q=q,
@@ -384,6 +403,9 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
             A_log=A_log,
             dt_bias=dt_bias,
             chunk_size=ctx.chunk_size,
+            w=w,
+            v_new=v_new,
+            h=h,
         )
         if ctx.use_qk_l2norm_in_kernel:
             dq = l2norm_bwd(q, q_rstd, dq)
@@ -393,7 +415,7 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
         return (
             dq.to(q), dk.to(k), dv.to(v), dg.to(g), db.to(beta_raw),
             None, dh0, None, None, None, None, None, None, None, dA_log, ddt_bias,
-            None, None, None, None, None,
+            None, None, None, None, None, None,
         )
 
 
@@ -417,6 +439,7 @@ def chunk_gated_delta_rule(
     chunk_indices: torch.LongTensor | None = None,
     cp_context: FLACPContext | None = None,
     return_intermediate_states: bool = False,
+    disable_recompute: bool = False,
     **kwargs,
 ):
     r"""
@@ -479,7 +502,13 @@ def chunk_gated_delta_rule(
             and `cu_seqlens` will be overridden by the context. Default: `None`.
         return_intermediate_states (bool, Optional):
             Return the recurrent state entering each chunk as a third output.
-            Requires `torch.no_grad()` or `torch.inference_mode()`; backward is unsupported. Default: `False`.
+            Requires `torch.no_grad()` or `torch.inference_mode()`, and `disable_recompute=False`;
+            backward is unsupported. Default: `False`.
+        disable_recompute (bool, Optional):
+            Whether to disable gradient recomputation in the kernel. When `True`,
+            the kernel will save all intermediate activations for backward pass,
+            which is beneficial for training small models at the cost of increased memory usage.
+            Only the Triton path recomputes; fused backends such as FlashQLA ignore it. Default: `False`.
 
     Returns:
         o (torch.Tensor):
@@ -526,6 +555,7 @@ def chunk_gated_delta_rule(
     """
     if return_intermediate_states:
         assert not torch.is_grad_enabled(), "return_intermediate_states requires gradients to be disabled"
+        assert disable_recompute is False, "return_intermediate_states must be used with disable_recompute=False"
     if 'transpose_state_layout' in kwargs:
         if state_v_first:
             raise ValueError("Cannot pass both `state_v_first` and the deprecated `transpose_state_layout`.")
@@ -612,6 +642,7 @@ def chunk_gated_delta_rule(
         cp_context,
         chunk_size,
         return_intermediate_states,
+        disable_recompute,
     )
 
 

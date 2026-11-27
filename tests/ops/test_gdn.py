@@ -935,6 +935,69 @@ def test_chunk_varlen(
 
 
 @pytest.mark.parametrize(
+    ('T', 'H', 'HV', 'K', 'V', 'cu_seqlens', 'state_v_first', 'use_gate_in_kernel', 'chunk_size', 'dtype'),
+    [
+        pytest.param(*test, id="T{}-H{}-HV{}-K{}-V{}-cu_seqlens{}-v_first{}-gate{}-chunk_size{}-{}".format(*test))
+        for test in [
+            (1000, 4, 4, 64, 64, None, False, False, 64, torch.bfloat16),
+            (1024, 2, 4, 64, 32, None, True, False, 32, torch.float16),
+            (500, 4, 4, 60, 64, None, False, True, 64, torch.float16),
+            (1000, 2, 4, 64, 64, [0, 256, 500, 1000], False, False, 64, torch.bfloat16),
+            (1000, 4, 4, 64, 64, [0, 15, 100, 1000], True, True, 64, torch.float16),
+        ]
+    ],
+)
+def test_chunk_disable_recompute(T, H, HV, K, V, cu_seqlens, state_v_first, use_gate_in_kernel, chunk_size, dtype, monkeypatch):
+    """Saved forward intermediates must give the same outputs and gradients as recomputing them."""
+    import fla.ops.gated_delta_rule.chunk as chunk_module
+
+    torch.manual_seed(42)
+    B = 1 if cu_seqlens is not None else 2
+    N = len(cu_seqlens) - 1 if cu_seqlens is not None else B
+    if cu_seqlens is not None:
+        cu_seqlens = torch.tensor(cu_seqlens, device=device)
+    q = torch.randn(B, T, H, K, dtype=dtype)
+    k = torch.randn(B, T, H, K, dtype=dtype)
+    v = torch.randn(B, T, HV, V, dtype=dtype)
+    g = torch.randn(B, T, HV) if use_gate_in_kernel else F.logsigmoid(torch.randn(B, T, HV))
+    beta = torch.rand(B, T, HV).sigmoid()
+    h0 = torch.randn(N, HV, V, K) if state_v_first else torch.randn(N, HV, K, V)
+    A_log = torch.randn(HV) if use_gate_in_kernel else None
+    inputs = [x.to(device).requires_grad_() for x in (q, k, v, g, beta, h0, A_log) if x is not None]
+    do, dht = torch.randn_like(inputs[2]), torch.randn_like(inputs[5])
+
+    def run(disable_recompute):
+        q, k, v, g, beta, h0, *A_log = inputs
+        o, ht = chunk_gated_delta_rule(
+            q, k, v, g, beta,
+            initial_state=h0,
+            output_final_state=True,
+            use_qk_l2norm_in_kernel=True,
+            state_v_first=state_v_first,
+            cu_seqlens=cu_seqlens,
+            chunk_size=chunk_size,
+            disable_recompute=disable_recompute,
+            **({'use_gate_in_kernel': True, 'A_log': A_log[0]} if A_log else {}),
+        )
+        return o, ht, *torch.autograd.grad((o * do).sum() + (ht * dht).sum(), inputs)
+
+    expected = run(False)
+
+    def fail(**kwargs):
+        raise AssertionError('disable_recompute=True must not recompute w and u')
+    monkeypatch.setattr(chunk_module, 'recompute_w_u_fwd', fail)
+    for name, ref, tri in zip(('o', 'ht', 'dq', 'dk', 'dv', 'dg', 'db', 'dh0', 'dA_log'), expected, run(True)):
+        assert torch.equal(ref, tri), name
+
+
+def test_chunk_disable_recompute_rejects_intermediate_states():
+    x = torch.randn(1, 64, 2, 32, device=device, dtype=torch.bfloat16)
+    g = torch.zeros(1, 64, 2, device=device)
+    with torch.no_grad(), pytest.raises(AssertionError, match='disable_recompute'):
+        chunk_gated_delta_rule(x, x, x, g, g, return_intermediate_states=True, disable_recompute=True)
+
+
+@pytest.mark.parametrize(
     ('H', 'D', 'mask_p', 'cu_seqlens', 'dtype'),
     [
         pytest.param(*test, id="H{}-D{}-mask_p{}-cu_seqlens{}-{}".format(*test))

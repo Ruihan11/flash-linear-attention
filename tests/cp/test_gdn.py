@@ -29,6 +29,7 @@ def _run_chunk(
     dtype,
     state_v_first: bool = False,
     Hq: int | None = None,
+    disable_recompute: bool = False,
 ):
     T = sum(lengths)
     assert T % world_size == 0, f"T={T} must be divisible by world_size={world_size}"
@@ -119,6 +120,7 @@ def _run_chunk(
         beta=beta_local,
         state_v_first=state_v_first,
         cp_context=context,
+        disable_recompute=disable_recompute,
     )
 
     o_local.backward(do_local)
@@ -164,4 +166,25 @@ def test_chunk(run_distributed, world_size, lengths, H, D, Hq, state_v_first):
         dtype=torch.bfloat16,
         state_v_first=state_v_first,
         Hq=Hq,
+    )
+
+
+@pytest.mark.parametrize(
+    ('lengths', 'H', 'D', 'Hq', 'state_v_first'),
+    [
+        pytest.param([3000, 4000, 3240], 4, 64, 2, False, id='cp2-gva-sequence-cut'),
+        pytest.param([3000, 4000, 3240], 4, 128, 4, True, id='cp2-v-first'),
+    ],
+)
+def test_chunk_disable_recompute(run_distributed, lengths, H, D, Hq, state_v_first):
+    run_distributed(
+        worker=_run_chunk,
+        world_size=2,
+        H=H,
+        D=D,
+        lengths=lengths,
+        dtype=torch.bfloat16,
+        state_v_first=state_v_first,
+        Hq=Hq,
+        disable_recompute=True,
     )
