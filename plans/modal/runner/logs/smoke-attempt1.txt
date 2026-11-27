@@ -1,0 +1,168 @@
+✓ Initialized. View run at
+https://modal.com/apps/rl5409/main/ap-63SyYR7w5qNU3jySiWZSZV
+Building image im-EbSAciKlkkts1EBzKRnFRv
+
+=> Step 0: FROM base
+
+=> Step 1: RUN apt-get update
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [383 kB]
+Fetched 9414 kB in 1s (9430 kB/s)
+Reading package lists...
+
+=> Step 2: RUN apt-get install -y build-essential
+Reading package lists...
+Building dependency tree...
+Reading state information...
+build-essential is already the newest version (12.9).
+0 upgraded, 0 newly installed, 0 to remove and 57 not upgraded.
+Saving image...
+Image saved, took 814.48ms
+
+Built image im-EbSAciKlkkts1EBzKRnFRv in 4.05s
+
+
+Building image im-kyXanY6690E4OwWdqmIfB5
+
+=> Step 0: FROM base
+
+=> Step 1: COPY --from=ghcr.io/astral-sh/uv:latest /uv /.uv/uv
+Getting image source signatures
+Copying blob sha256:f7381e89659e889c8a96ff3d4b2a2cb9f7bf087d7e4720e6914f614f296dc54a
+Copying blob sha256:d3cf3ce9490778fee2974a388fda4a300d3efadc1a0d70a21c4108b99ddc53bd
+Copying config sha256:dac3b321b249d289ee8d1e7fc6eb0cb6dff3c9368d5d3edf99a40ce38064b59f
+Writing manifest to image destination
+Unpacking OCI image
+   • unpacking rootfs ...
+   • ... done
+   • unpacked image rootfs: /tmp/task-data/ta-01M8DFFKAC4HJSDY6BVAYZTD8B/registry-unpackKby71K
+
+=> Step 2: RUN /.uv/uv pip install --python $(command -v python) --compile-bytecode einops pytest pytest-xdist 'torch>=2.7.0' 'transformers>=5.6.2,<6' 'triton>=3.3'
+Using Python 3.12.10 environment at: /usr/local
+Resolved 63 packages in 326ms
+Downloading nvidia-cufft (208.1MiB)
+Downloading triton (272.4MiB)
+Downloading torch (514.2MiB)
+Downloading nvidia-cudnn-cu13 (495.1MiB)
+Downloading nvidia-cublas (386.1MiB)
+Downloading nvidia-cusolver (217.4MiB)
+Downloading nvidia-nvshmem-cu13 (129.1MiB)
+Downloading nvidia-cuda-cupti (11.4MiB)
+Downloading nvidia-cusparselt-cu13 (162.3MiB)
+Downloading nvidia-nccl-cu13 (206.0MiB)
+Downloading nvidia-nvjitlink (44.5MiB)
+Downloading sympy (6.0MiB)
+Downloading transformers (12.9MiB)
+Downloading nvidia-cusparse (144.0MiB)
+Downloading numpy (15.0MiB)
+Downloading nvidia-cuda-nvrtc (44.8MiB)
+Downloading nvidia-cuda-cccl (3.9MiB)
+Downloading tokenizers (3.2MiB)
+Downloading hf-xet (4.1MiB)
+Downloading cuda-bindings (8.0MiB)
+Downloading nvidia-cuda-runtime (2.2MiB)
+Downloading nvidia-cufile (1.3MiB)
+Downloading pygments (1.2MiB)
+Downloading networkx (2.0MiB)
+Downloading pydantic-core (2.2MiB)
+ Downloaded nvidia-cufile
+ Downloaded pydantic-core
+ Downloaded nvidia-cuda-runtime
+ Downloaded tokenizers
+ Downloaded hf-xet
+ Downloaded pygments
+ Downloaded cuda-bindings
+ Downloaded nvidia-cuda-cupti
+ Downloaded networkx
+ Downloaded nvidia-cuda-nvrtc
+ Downloaded nvidia-nvjitlink
+ Downloaded numpy
+ Downloaded sympy
+ Downloaded nvidia-cuda-cccl
+ Downloaded nvidia-nvshmem-cu13
+ Downloaded transformers
+ Downloaded nvidia-cusparse
+ Downloaded nvidia-cusparselt-cu13
+ Downloaded nvidia-nccl-cu13
+ Downloaded nvidia-cufft
+ Downloaded nvidia-cusolver
+ Downloaded nvidia-cublas
+ Downloaded triton
+ Downloaded nvidia-cudnn-cu13
+ Downloaded torch
+Prepared 62 packages in 5.53s
+Installed 62 packages in 2.73s
+Bytecode compiled 9910 files in 3.75s
+ + annotated-doc==0.0.7
+ + annotated-types==0.8.0
+ + anyio==4.16.0
+ + click==8.5.1
+ + cuda-bindings==13.5.0
+ + cuda-pathfinder==1.9.1
+ + cuda-toolkit==13.2.2
+ + einops==0.8.2
+ + execnet==2.1.2
+ + filelock==4.3.1
+ + fsspec==2026.9.0
+ + h11==0.16.0
+ + hf-xet==1.8.0
+ + httpcore2==2.16.2
+ + httpx2==2.16.2
+ + huggingface-hub==2.5.0
+ + idna==3.20
+ + iniconfig==2.3.1
+ + jinja2==3.1.6
+ + markdown-it-py==4.3.0
+ + markupsafe==3.0.4
+ + mdurl==0.1.2
+ + mpmath==1.3.0
+ + networkx==3.7
+ + numpy==2.5.5
+ + nvidia-cublas==13.4.1.3
+ + nvidia-cuda-cccl==13.3.5.0.6
+ + nvidia-cuda-cupti==13.2.86
+ + nvidia-cuda-nvrtc==13.2.86
+ + nvidia-cuda-runtime==13.2.86
+ + nvidia-cudnn-cu13==9.26.0.51
+ + nvidia-cufft==12.2.0.57
+ + nvidia-cufile==1.17.1.22
+ + nvidia-cusolver==12.2.0.11
+ + nvidia-cusparse==12.7.10.12
+ + nvidia-cusparselt-cu13==0.8.1
+ + nvidia-nccl-cu13==2.30.7
+ + nvidia-nvjitlink==13.5.37
+ + nvidia-nvshmem-cu13==3.7.2
+ + nvidia-nvtx==13.2.86
+ + pluggy==1.7.0
+ + pydantic==2.14.4
+ + pydantic-core==2.50.5
+ + pygments==2.21.0
+ + pytest==9.2.0
+ + pytest-xdist==3.8.0
+ + pyyaml==6.0.4
+ + regex==2026.11.25
+ + rich==15.0.0
+ + safetensors==0.8.0
+ + setuptools==84.2.1
+ + shellingham==1.5.4
+ + sympy==1.14.0
+ + tokenizers==0.23.3
+ + torch==2.15.0
+ + tqdm==4.70.1
+ + transformers==5.24.1
+ + triton==3.9.0
+ + truststore==0.10.5
+ + typer==0.29.3
+ + typing-extensions==4.16.0
+ + typing-inspection==0.4.5
+Saving image...
+Image saved, took 5.84s
+
+Built image im-kyXanY6690E4OwWdqmIfB5 in 22.22s
+
+
+Stopping app - uncaught exception raised locally: InvalidError('Please add a payment method to use H100 GPU functions.').
+Error: Please add a payment method to use H100 GPU functions.
