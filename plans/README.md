@@ -15,13 +15,23 @@ plans/
 - 状态只用 `in progress`、`killed`、`pushed`、`merged`。实验结束后保留原路径，只更新本索引。
 - 各平台的测试结果写在同一个实验目录里，不按平台拆目录。平台专用的步骤单独成文，例如 `npu-test.md`。
 - `*.log` 被仓库的 `.gitignore` 忽略，只留在本机。
+- 测试 PR 分支时用 `git worktree`，不在主仓库里切分支。`plans/` 只在 `main` 上，被测代码在 PR 分支上，两个目录并存才能同时用到。写法：
+
+  ```bash
+  git fetch origin <分支>
+  git worktree add ../fla-<实验名> <分支>      # 目录与主仓库同级，共用同一个 .git
+  git worktree list                           # 查看
+  git worktree remove ../fla-<实验名>          # 测完删除，分支和提交保留
+  ```
+
+  同一分支不能同时在两个 worktree 里检出。不要用 `rm -rf` 删目录，否则要再跑 `git worktree prune`。可编辑安装（`pip install -e .`）指向哪个目录，`import fla` 就用哪个目录的代码，跑测试前用 `python -c "import fla; print(fla.__file__)"` 确认。
 
 ## 平台
 
 | 平台 | 硬件 | 用途 | 状态 |
 | --- | --- | --- | --- |
 | A800 | 8 × A800-SXM4-80GB，SM80 | 本机。正确性、配对计时、CP 多卡 | 可用。计时前用 `prs/gdn-disable-recompute/evidence/wait-gpu.sh` 取空闲卡 |
-| 910B | 昇腾 NPU | 另一台机器。验证昇腾后端的正确性和收益 | 尚未运行过任何测试 |
+| 910B | 8 × 昇腾 910B3，HBM 64 GB | 验证昇腾后端的正确性和收益 | 可用。conda 环境 `fla-npu-210`（triton-ascend 3.6.0，CANN 9.0.0），旧环境 `fla-npu` 的 triton-ascend 3.2.0 跑不了当前昇腾后端。每次测试前用 `prs/gdn-disable-recompute/evidence/wait-npu.sh` 取空闲卡并设 `ASCEND_RT_VISIBLE_DEVICES` |
 | Modal | 云端 H100、B200 等 | SM90 及以上的测试，见 [modal/](modal/PLAN.md) | 已暂停。账号未绑定支付方式，远端 pytest 尚未执行过 |
 
 ## PR 实验
@@ -30,7 +40,7 @@ plans/
 
 | 实验 | 状态 | A800 | 910B | 结果 |
 | --- | --- | --- | --- | --- |
-| [GDN chunk 反向复用前向中间量](prs/gdn-disable-recompute/README.md) | **pushed** | 已测 | 未测，[步骤](prs/gdn-disable-recompute/npu-test.md) | 提交 `fa1b94af` 已推到 fork 分支 `perf/gdn-disable-recompute`，未开 PR。`fwdbwd` 配对耗时下降 11.0–13.9%，梯度逐位一致，主负载每层多保留 576 MiB。回归 203 passed。[PR 草稿](prs/gdn-disable-recompute/pr.md) |
+| [GDN chunk 反向复用前向中间量](prs/gdn-disable-recompute/README.md) | **pushed** | 已测 | 已测，[结果](prs/gdn-disable-recompute/npu-test.md#实测结果) | 提交 `fa1b94af` 已推到 fork 分支 `perf/gdn-disable-recompute`，未开 PR。`fwdbwd` 配对耗时下降 11.0–13.9%，梯度逐位一致，A800 回归 203 passed。910B 上降 13.4–20.7%，梯度逐位一致，回归 205 passed，CP 两卡 8 passed。生产路径每层多保留 `V=256` 448 MiB、`K=V=128` 256 MiB（原记录的 576 MiB 多算了未保存的 `u`）。[PR 草稿](prs/gdn-disable-recompute/pr.md) |
 | [GDN chunk 训练路径的算法优化研讨](prs/gdn-algorithmic-optimization/README.md) | **in progress** | 只读分析 | — | 归纳了社区算法类性能 PR 的五种做法并列出 GDN 候选，候选 B 已独立为上一行的实验。 |
 | [MoM 短续写缓存](prs/mom-short-continuation-cache/README.md) | **in progress** | 未测 | — | 上游 issue #1611 已有贡献者认领，本地尚未运行独立验证。 |
 | [GDN recurrent 的 GVA 头数校验](prs/gdn-recurrent-gva-heads/README.md) | **merged** | 已测 | — | PR [#1851](https://github.com/fla-org/flash-linear-attention/pull/1851) 已合并，merge commit `399504c6`。A800 recurrent 测试 33 项通过。 |

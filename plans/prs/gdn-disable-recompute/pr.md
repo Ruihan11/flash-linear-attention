@@ -2,9 +2,9 @@
 
 ## Summary
 
-`chunk_gated_delta_rule` gains an opt-in `disable_recompute` flag, matching the existing flag on KDA, GDN-2, DPLR and RWKV7. When enabled, the forward saves `w`, `v_new` and `h`, and the backward skips `recompute_w_u_fwd` and the second `chunk_gated_delta_rule_fwd_h`. On an A800 this lowers forward+backward time by 11.0–13.9% with bitwise-identical outputs and gradients.
+`chunk_gated_delta_rule` gains an opt-in `disable_recompute` flag, matching the existing flag on KDA, GDN-2, DPLR and RWKV7. When enabled, the forward saves `w`, `v_new` and `h`, and the backward skips `recompute_w_u_fwd` and the second `chunk_gated_delta_rule_fwd_h`. This lowers forward+backward time by 11.0–13.9% on an A800 and 13.4–20.7% on an Ascend 910B3, with bitwise-identical outputs and gradients on both.
 
-The cost is memory held from forward to backward: `w`, `v_new` and `h` per call. For BF16 `B=2, T=8192, HV=16, K=128, V=256` that is 576 MiB per layer (measured by stacking 1, 4 and 12 calls; 12 calls raise peak allocation from 5224 to 11818 MiB). The default is `False` and the default path is unchanged.
+The cost is memory held from forward to backward: `w`, `v_new` and `h` per call. For BF16 `B=2, T=8192, HV=16, K=128, V=256` that is 448 MiB per layer (`h` 256, `v_new` 128, `w` 64). Stacking 1, 4 and 12 calls on the 910B3 measured 449 MiB per layer; 12 calls raise peak allocation from 5963 to 10776 MiB. The default is `False` and the default path is unchanged.
 
 Limitations: the flag only affects the Triton path. FlashQLA is a fused implementation without a recompute step and ignores it. `GatedDeltaNet` does not expose the flag yet. It cannot be combined with `return_intermediate_states`.
 
@@ -18,7 +18,8 @@ Hardware: NVIDIA A800-SXM4-80GB (SM80), driver 580.65.06, PyTorch 2.10.0+cu130, 
 - `FLA_CI_ENV=0 pytest -q tests/cp/test_gdn.py -k cp2`: 8 passed.
 - With the default `disable_recompute=False`, outputs and gradients are `torch.equal` to the base on three shapes (dense `V=256`, dense `V=128`, packed GVA FP16).
 - `ruff check` and the pre-commit hooks pass on the three changed files.
-- Not run: the cp4 and cp8 cases, the other files listed by `scripts/find_dependent_tests.py fla/ops/gated_delta_rule/chunk.py`, and any SM90+, Blackwell or Ascend device. The FlashQLA path cannot run on SM80.
+- Ascend 910B3, CANN 9.0.0, torch 2.10.0, torch_npu 2.10.0.post7, triton-ascend 3.6.0 (CI uses CANN 9.1.0): `tests/ops/test_gdn.py` 118 passed, 21 skipped; `tests/ops/test_gdn_kernels.py tests/ops/test_gdp.py tests/layers/test_gated_deltanet.py` 79 passed, 2 skipped; `tests/cp/test_gdn.py -k cp2` 8 passed. All 23 skips are NVIDIA-only cases (FlashQLA, Blackwell, SM120, TileLang).
+- Not run: the cp4 and cp8 cases, the other files listed by `scripts/find_dependent_tests.py fla/ops/gated_delta_rule/chunk.py`, and any SM90+ or Blackwell device. The FlashQLA path cannot run on SM80.
 
 ## Benchmark / NCU
 
@@ -35,7 +36,18 @@ Same GPU, same process, `use_qk_l2norm_in_kernel=True`, seed 42. Each row is the
 
 Default path, `python -m benchmarks.ops.run --op chunk_gdn --modes fwd fwdbwd --base 6511ea3e`: forward 0.99–1.00x and forward+backward 0.99–1.00x on five of six shapes. `B=8, T=1024, H=8, D=64` forward+backward read 0.97x (1.757 → 1.804 ms). Four alternating reruns of that shape gave base medians 1.753–1.813 ms and candidate medians 1.773–1.809 ms, so the two ranges overlap.
 
-NCU was not collected. The saving is two whole kernel launches, and only SM80 was measured.
+Ascend 910B3, same shapes with `K=V=128` unless noted, wall clock around `torch.npu.synchronize`, same pairing. All 8 pairs favoured the saved path in every row.
+
+| Workload | Recompute (ms) | Saved (ms) | Time reduction |
+| --- | ---: | ---: | ---: |
+| BF16 dense `B=2, T=8192, H=HV=16, K=128, V=256` | 66.143 | 55.888 | 15.5% |
+| BF16 dense, `V=128` | 45.084 | 38.741 | 14.1% |
+| BF16 packed, four sequences, `T=16384, V=128` | 126.982 | 100.684 | 20.7% |
+| BF16 grouped heads `H=8, HV=16, V=128` | 45.266 | 39.013 | 13.9% |
+| BF16 `B=4, T=2048, H=4, K=V=64` | 6.409 | 5.553 | 13.4% |
+| FP16 dense, `V=128` | 44.304 | 38.156 | 13.9% |
+
+NCU and NPU traces were not collected. The saving is two whole kernel launches.
 
 ## Breaking changes
 

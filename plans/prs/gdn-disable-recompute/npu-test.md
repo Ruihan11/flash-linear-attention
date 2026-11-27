@@ -1,6 +1,6 @@
 # 在昇腾 910B 上测试 GDN `disable_recompute`
 
-状态：未运行。本文件是测试步骤，里面的预期都来自读代码和 A800 结果，910B 上没有任何实测。
+状态：已运行，全部通过。结果见文末[实测结果](#实测结果)。下面的步骤是运行前写的，其中的预期来自读代码和 A800 结果。
 
 ## 测什么
 
@@ -167,9 +167,20 @@ run('dense-V256', 2, 8192, 16, 16, 128, 256, bf)
 | `recompute_twice` | 全 `True` | 昇腾 kernel 不逐位确定，逐位断言不适用，改看相对误差 |
 | `saved_vs_recompute` | 全 `True`，或误差不高于 `recompute_twice` | 两条路径有真实差异，停下查原因 |
 | `fwdbwd ... paired_pct` | 为正且 8 组里多数胜出 | 记录数值。墙钟计时噪声比 GPU event 大，区间重叠时重跑一次 |
-| `peak_mib ... delta` | 4 层与 1 层的差除以 3 即每层增量 | 与推算对比：`D128` 主负载每层 `h` 256 MiB、`w` 64 MiB、`v_new` 64 MiB，合计 384 MiB |
+| `peak_mib ... delta` | 4 层与 1 层的差除以 3 即每层增量 | 与推算对比：`D128` 主负载每层 `h` 128 MiB、`w` 64 MiB、`v_new` 64 MiB，合计 256 MiB。本行原先把 `h` 写成 256 MiB，那是 `V=256` 的值 |
 
 计时前后各看一次 `npu-smi info`，中途有其他进程占用同一张卡的结果作废重跑。
+
+## 取空闲卡
+
+每次测试前先用 `evidence/wait-npu.sh` 取空闲卡，再通过 `ASCEND_RT_VISIBLE_DEVICES` 绑定。不设这个变量时默认用 NPU 0，而 NPU 0 可能被别人占用。
+
+```bash
+export ASCEND_RT_VISIBLE_DEVICES=$(plans/prs/gdn-disable-recompute/evidence/wait-npu.sh)     # 1 张
+export ASCEND_RT_VISIBLE_DEVICES=$(plans/prs/gdn-disable-recompute/evidence/wait-npu.sh 2)   # CP 两卡
+```
+
+空闲的判定是该卡没有进程且 AICore 利用率不高于 5%。HBM 占用不作为条件，910B3 空闲时也有约 3.4 GB 读数。空闲卡不够时脚本每 10 分钟重查一次，设 `ONCE=1` 则直接失败。
 
 ## 需要带回来的东西
 
@@ -184,3 +195,59 @@ run('dense-V256', 2, 8192, 16, 16, 128, 256, bf)
 - "昇腾走同一套编排"是读代码的判断：`gated_delta_rule/backends/` 下只看到 FlashQLA 注册了整个 `chunk_gated_delta_rule`，昇腾注册的是 `recompute_w_u_fwd` 和 `chunk_gated_delta_rule_fwd_h` 这一层。第 2 步的 `calls` 行用来验证它。
 - 910B 单卡显存小于 A800 的 80 GB，多层大形状先看余量。
 - PR 描述里的昇腾一栏在拿到这些结果前保持"未测"。
+
+## 实测结果
+
+8 × 昇腾 910B3（HBM 64 GB），npu-smi 25.0.rc1.2，CANN 9.0.0（仓库 CI 用 9.1.0），Python 3.11.18，torch 2.10.0+cpu，torch_npu 2.10.0.post7，triton-ascend 3.6.0，conda 环境 `fla-npu-210`。被测提交 `fa1b94af`，worktree `/home/rhli15/dev/fla-gdn-disable-recompute`。每次测试前用 `evidence/wait-npu.sh` 取空闲卡，跑完后确认卡上没有其他进程。脚本和日志在 [evidence/npu/](evidence/npu/)。
+
+原有环境 `fla-npu`（triton-ascend 3.2.0）跑不了：昇腾后端传的 `enable_ubuf_saving` 编译选项在 3.2.0 里不存在，5 项报 `KeyError`。这与本改动无关。
+
+### 四个问题的答案
+
+1. **编排相同。** 六个形状的调用次数都是重算 `{'wu': 1, 'h': 2}`、保存 `{'wu': 0, 'h': 1}`。
+2. **逐位一致。** `saved_vs_recompute` 和 `recompute_twice` 的五个梯度全部 `torch.equal`，测试里的 `torch.equal` 断言可以保留。
+3. **`fwdbwd` 配对耗时降 13.4–20.7%**，六个形状全部 8/8 胜出。
+4. **每层多保留的显存等于 `w + v_new + h` 的字节数**：`K=V=128` 为 256 MiB，`V=256` 为 449 MiB，`K=V=64` 小形状为 12 MiB。
+
+### 计时
+
+NPU 2，同步加墙钟计时，8 组交错配对，每组 12 次 `fwdbwd`。`npu_bench.log`
+
+| 形状 | 重算 (ms) | 保存 (ms) | 配对降幅 | 胜出 |
+| --- | ---: | ---: | ---: | ---: |
+| small-D64 `B=4,T=2048,H=4,K=V=64` | 6.409 | 5.553 | 13.36% | 8/8 |
+| dense-D128 `B=2,T=8192,H=HV=16,K=V=128` | 45.084 | 38.741 | 14.10% | 8/8 |
+| packed-D128 `T=16384`，四条序列 | 126.982 | 100.684 | 20.71% | 8/8 |
+| gva `H=8,HV=16,K=V=128` | 45.266 | 39.013 | 13.89% | 8/8 |
+| fp16-D128 | 44.304 | 38.156 | 13.87% | 8/8 |
+| dense-V256 `K=128,V=256` | 66.143 | 55.888 | 15.50% | 8/8 |
+
+packed 的降幅高于其他形状，没有采集 trace，原因未查。
+
+### 多层显存
+
+NPU 2，`torch.npu.max_memory_allocated`。每层增量取 (12 层差 − 1 层差) / 11。`mem_v256.log`
+
+| 形状 | 1 层 重算 → 保存 | 4 层 | 12 层 | 每层增量 | 按张量字节数推算 |
+| --- | --- | --- | --- | ---: | ---: |
+| BF16 `K=128,V=256` | 2742 → 2614 MiB | 3619 → 4840 MiB | 5963 → 10776 MiB | 449.2 MiB | 448 MiB（`h` 256，`v_new` 128，`w` 64） |
+| BF16 `K=V=128` | 2038 → 1974 MiB | 2728 → 3432 MiB | 4563 → 7320 MiB | 256.5 MiB | 256 MiB（`h` 128，`v_new` 64，`w` 64） |
+
+这暴露了 A800 记录里的一个问题：[README.md](README.md) 阶段 1a 的 576 MiB 是实验脚本量的，脚本保存了 `w/u/h/v_new` 四个张量。提交 `fa1b94af` 只保存 `w/v_new/h`，不保存 `u`（`V=256` 时 128 MiB），所以生产路径应为 448 MiB。A800 上没有用生产路径重量过。
+
+### 回归
+
+| 卡 | 命令 | 结果 | 耗时 |
+| --- | --- | --- | --- |
+| NPU 2 | `pytest tests/ops/test_gdn.py -k disable_recompute` | 6 passed | 4 分 13 秒 |
+| NPU 6 | `pytest tests/ops/test_gdn.py` | 118 passed，21 skipped | 40 分 56 秒 |
+| NPU 7 | `pytest tests/ops/test_gdn_kernels.py tests/ops/test_gdp.py tests/layers/test_gated_deltanet.py` | 79 passed，2 skipped | 57 分 13 秒 |
+| NPU 6+7 | `pytest tests/cp/test_gdn.py -k cp2` | 8 passed | 15 分 48 秒 |
+
+均设 `FLA_CI_ENV=0`。跳过的 23 项都是 NVIDIA 专属用例：FlashQLA 16 项、Blackwell guard 3 项、SM120 标志 1 项、TileLang 1 项、`test_chunk_o_deterministic` 2 项。候选没有失败项，所以没有在 base 上跑对照。
+
+### 未做
+
+- `tests/models/test_modeling_gated_deltanet.py`、cp4、cp8。
+- NPU trace。
+- CANN 9.1.0 上的复测。

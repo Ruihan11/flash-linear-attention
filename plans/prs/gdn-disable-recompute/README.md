@@ -69,6 +69,8 @@ A800-SXM4-80GB，`6511ea3e`，PyTorch 2.10.0+cu130，seed 42。仍通过实验�
 
 **多层显存。** 每层增量与推算完全一致。[日志](evidence/memory.log)
 
+> 更正（910B 测试后）：下表是实验脚本的数字，脚本保存 `w/u/h/v_new` 四个张量。提交 `fa1b94af` 不保存 `u`，生产路径的每层增量是 `V=256` 主负载 448 MiB、小形状 12 MiB，910B 实测为 449 MiB 和 12 MiB。A800 上没有用生产路径重量过。
+
 | 负载 | 每层多保留 | 1 层峰值 默认 → 复用 | 4 层 | 12 层 |
 | --- | ---: | --- | --- | --- |
 | BF16 `B=2,T=8192,H=16,K=128,V=256` | 576 MiB | 2023 → 2281 MiB | 2896 → 4882 MiB | 5224 → 11818 MiB |
@@ -212,4 +214,9 @@ FLA_CI_ENV=0 .venv/bin/python -m pytest -q tests/cp/test_gdn.py -k cp2
 
 ## 昇腾 910B 测试
 
-未运行。步骤、NPU 版计时脚本和通过标准见 [npu-test.md](npu-test.md)。
+已运行，全部通过。910B3，CANN 9.0.0，torch_npu 2.10.0.post7，triton-ascend 3.6.0，提交 `fa1b94af`。详见 [npu-test.md](npu-test.md#实测结果)。
+
+- 调用次数与 A800 相同，梯度逐位一致。
+- `fwdbwd` 配对耗时降 13.4–20.7%，六个形状全部 8/8 胜出。
+- 每层多保留 `K=V=128` 256 MiB、`V=256` 449 MiB，与 `w + v_new + h` 的字节数一致。
+- 回归 205 passed，23 skipped（均为 NVIDIA 专属用例），CP 两卡 8 passed。
